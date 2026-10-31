@@ -39,26 +39,42 @@ process.env.PUBLIC_URL = url;
 await import("./line.js");
 
 const line = new messagingApi.MessagingApiClient({ channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN! });
-try {
-  await line.setWebhookEndpoint({ endpoint: `${url}/webhook` });
-  console.log(`✅ ตั้ง Webhook URL ใน LINE เป็น ${url}/webhook ให้แล้ว (เปลี่ยนใหม่อัตโนมัติทุกครั้งที่รัน)`);
-} catch (error) {
-  console.log(`⚠️ ตั้ง Webhook อัตโนมัติไม่สำเร็จ (${error instanceof Error ? error.message : error})`);
-  console.log(`   ไปตั้งเองใน LINE Developers Console → Messaging API → Webhook URL: ${url}/webhook`);
-}
+const endpoint = `${url}/webhook`;
+const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
-// The tunnel's DNS name can take a few seconds to resolve, so retry LINE's test call before reporting.
-for (let attempt = 1; attempt <= 6; attempt++) {
+// The tunnel's DNS name takes a few seconds to resolve, and LINE rejects (400) a webhook URL it cannot reach yet,
+// so wait until LINE's test call succeeds before setting it.
+let reachable = false;
+for (let attempt = 1; attempt <= 12 && !reachable; attempt++) {
   await new Promise((r) => setTimeout(r, 5000));
   try {
-    const result = await line.testWebhookEndpoint({ endpoint: `${url}/webhook` });
-    if (result.success) {
-      console.log("✅ LINE ส่ง webhook มาถึงเครื่องนี้ได้แล้ว ทักบอทใน LINE ได้เลย");
-      break;
-    }
-    if (attempt === 6) console.log(`⚠️ LINE ยังเข้าไม่ถึง: ${result.reason ?? result.detail ?? "unknown"}`);
+    const result = await line.testWebhookEndpoint({ endpoint });
+    reachable = Boolean(result.success);
+    if (!reachable && attempt === 12) console.log(`⚠️ LINE ยังเข้าไม่ถึง: ${result.reason || result.detail || "unknown"}`);
   } catch (error) {
-    if (attempt === 6) console.log(`⚠️ ทดสอบ webhook ไม่ผ่าน: ${error instanceof Error ? error.message : error}`);
+    if (attempt === 12) console.log(`⚠️ ทดสอบ webhook ไม่ผ่าน: ${message(error)}`);
+  }
+}
+
+let isSet = false;
+for (let attempt = 1; attempt <= 3 && !isSet; attempt++) {
+  try {
+    await line.setWebhookEndpoint({ endpoint });
+    isSet = true;
+  } catch (error) {
+    if (attempt === 3) console.log(`⚠️ ตั้ง Webhook อัตโนมัติไม่สำเร็จ (${message(error)})`);
+    else await new Promise((r) => setTimeout(r, 5000));
+  }
+}
+if (!isSet) {
+  console.log(`   ไปตั้งเองใน LINE Developers Console → Messaging API → Webhook URL: ${endpoint}`);
+} else {
+  console.log(`✅ ตั้ง Webhook URL ใน LINE เป็น ${endpoint} ให้แล้ว (เปลี่ยนใหม่อัตโนมัติทุกครั้งที่รัน)`);
+  const info = await line.getWebhookEndpoint().catch(() => undefined);
+  if (info && !info.active) {
+    console.log("⚠️ สวิตช์ Use webhook ยังปิดอยู่: เปิดใน LINE Developers Console → Messaging API → Use webhook");
+  } else if (reachable) {
+    console.log("✅ LINE ส่ง webhook มาถึงเครื่องนี้ได้แล้ว ทักบอทใน LINE ได้เลย");
   }
 }
 console.log("ปล่อยหน้าต่างนี้เปิดไว้ ปิดเมื่อไหร่บอทหยุดทำงาน (กด Ctrl+C เพื่อปิด)");
